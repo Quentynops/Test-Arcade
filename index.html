@@ -1,0 +1,347 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#10131b">
+<title>Game Boy Arcade</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 20px;
+  background: #10131b;
+  color: white;
+  font-family: Arial, sans-serif;
+  text-align: center;
+}
+
+h1 {
+  color: #8cff9b;
+  margin-bottom: 8px;
+}
+
+.panel {
+  max-width: 900px;
+  margin: 20px auto;
+  padding: 20px;
+  background: #1b2230;
+  border: 1px solid #39465a;
+  border-radius: 16px;
+}
+
+input[type="file"] {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  margin: 18px auto;
+  padding: 10px;
+  background: #252e3e;
+  color: white;
+  border-radius: 8px;
+}
+
+button {
+  padding: 12px 18px;
+  margin: 5px;
+  border: none;
+  border-radius: 8px;
+  background: #8cff9b;
+  color: #10131b;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #b5ffc0;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#game {
+  width: 100%;
+  height: 520px;
+  margin: 20px auto;
+  overflow: hidden;
+  background: #000;
+  border: 2px solid #39465a;
+  border-radius: 8px;
+}
+
+#game canvas {
+  max-width: 100%;
+}
+
+#status {
+  color: #b9c7dc;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.note {
+  color: #aab7cb;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.good {
+  color: #8cff9b !important;
+}
+
+.error {
+  color: #ff8f8f !important;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid #39465a;
+  margin: 22px 0;
+}
+
+footer {
+  margin: 20px auto;
+  color: #8996aa;
+  font-size: 12px;
+}
+
+@media (max-width: 600px) {
+  body {
+    padding: 10px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
+  #game {
+    height: 400px;
+  }
+
+  button {
+    padding: 12px;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<h1>🎮 Game Boy Arcade</h1>
+<p>Load and play your own Game Boy games.</p>
+
+<div class="panel">
+  <h2>Choose Your Game</h2>
+
+  <p class="note">
+    Supported formats: .GB and .GBC
+  </p>
+
+  <input
+    id="rom"
+    type="file"
+    accept=".gb,.gbc,.GB,.GBC"
+  >
+
+  <button id="load">Load Game</button>
+  <button id="fullscreen">Fullscreen</button>
+
+  <p id="status" role="status" aria-live="polite">
+    Checking offline support...
+  </p>
+
+  <div id="game"></div>
+
+  <hr>
+
+  <h3>Controls</h3>
+
+  <p>
+    <strong>Move:</strong> Arrow keys<br>
+    <strong>A:</strong> X key<br>
+    <strong>B:</strong> Z key<br>
+    <strong>Start:</strong> Enter<br>
+    <strong>Select:</strong> Shift
+  </p>
+
+  <p class="note">
+    You can also use the emulator's built-in touch controls
+    when available.
+  </p>
+
+  <hr>
+
+  <h3>Save Your Progress</h3>
+
+  <p class="note">
+    Open the emulator's in-game menu to use Save State
+    or Load State if supported by the selected core.
+    In-game battery saves may be stored separately.
+  </p>
+
+  <button id="saveHelp">How to Save</button>
+
+  <p id="saveInfo" class="note" hidden>
+    Open the emulator menu inside the game window and look
+    for Save State. To resume, open the same menu and choose
+    Load State. Keep the same browser and website address
+    when using browser-stored saves.
+  </p>
+</div>
+
+<footer>
+  Game Boy Arcade · Offline-ready when required assets are cached
+</footer>
+
+<script>
+(() => {
+  "use strict";
+
+  const romInput = document.getElementById("rom");
+  const loadButton = document.getElementById("load");
+  const fullscreenButton = document.getElementById("fullscreen");
+  const status = document.getElementById("status");
+  const game = document.getElementById("game");
+
+  let currentRomURL = null;
+  let loaderScript = null;
+  let emulatorStarted = false;
+
+  function setStatus(message, type = "") {
+    status.textContent = message;
+    status.className = type;
+  }
+
+  // Register offline caching.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", async () => {
+      try {
+        await navigator.serviceWorker.register(
+          "./offline-worker.js"
+        );
+
+        await navigator.serviceWorker.ready;
+
+        setStatus(
+          "Offline support enabled. Load a game while the emulator files are available.",
+          "good"
+        );
+      } catch (error) {
+        setStatus(
+          "Offline support could not be enabled. Check that offline-worker.js exists.",
+          "error"
+        );
+      }
+    });
+  } else {
+    setStatus(
+      "This browser does not support service workers. Online gameplay may still work."
+    );
+  }
+
+  // Load a Game Boy ROM.
+  loadButton.addEventListener("click", () => {
+    const file = romInput.files[0];
+
+    if (!file) {
+      setStatus("Choose a .gb or .gbc game file first.", "error");
+      return;
+    }
+
+    if (!/\.(gb|gbc)$/i.test(file.name)) {
+      setStatus("Unsupported file. Choose a .gb or .gbc file.", "error");
+      return;
+    }
+
+    if (loaderScript) {
+      loaderScript.remove();
+      loaderScript = null;
+    }
+
+    if (currentRomURL) {
+      URL.revokeObjectURL(currentRomURL);
+      currentRomURL = null;
+    }
+
+    emulatorStarted = false;
+    game.replaceChildren();
+
+    currentRomURL = URL.createObjectURL(file);
+
+    // EmulatorJS configuration.
+    window.EJS_player = "#game";
+    window.EJS_core = "gb";
+    window.EJS_gameUrl = currentRomURL;
+    window.EJS_gameName = file.name.replace(/\.(gb|gbc)$/i, "");
+    window.EJS_pathtodata = "./data/";
+    window.EJS_startOnLoaded = true;
+
+    // Display errors reported by the emulator when possible.
+    window.EJS_onGameStart = () => {
+      emulatorStarted = true;
+      setStatus("Game started: " + file.name, "good");
+    };
+
+    setStatus(
+      "Loading " + file.name + ". Downloading or opening emulator files..."
+    );
+
+    loaderScript = document.createElement("script");
+    loaderScript.src = "./data/loader.js";
+
+    loaderScript.onload = () => {
+      if (!emulatorStarted) {
+        setStatus(
+          "Emulator loader loaded. Waiting for the game to start..."
+        );
+      }
+    };
+
+    loaderScript.onerror = () => {
+      setStatus(
+        "Could not load ./data/loader.js. Check that the complete EmulatorJS data folder is uploaded and that your network allows it.",
+        "error"
+      );
+    };
+
+    document.body.appendChild(loaderScript);
+  });
+
+  // Fullscreen.
+  fullscreenButton.addEventListener("click", async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await game.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (error) {
+      setStatus("Fullscreen is not available in this browser.", "error");
+    }
+  });
+
+  // Save instructions.
+  document.getElementById("saveHelp").addEventListener("click", () => {
+    const info = document.getElementById("saveInfo");
+    info.hidden = !info.hidden;
+  });
+
+  // Release temporary ROM URLs when leaving the page.
+  window.addEventListener("pagehide", () => {
+    if (currentRomURL) {
+      URL.revokeObjectURL(currentRomURL);
+      currentRomURL = null;
+    }
+  });
+})();
+</script>
+
+</body>
+</html>
